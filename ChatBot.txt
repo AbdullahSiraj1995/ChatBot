@@ -1,0 +1,54 @@
+import os
+from langchain.chains import RetrievalQA
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
+
+# 1. SETUP (Assuming you already have site_data and pdf_list)
+# For testing, we use FAISS because it's fast and lives in memory
+def start_terminal_chat(langchain_docs, pdf_list):
+    print("\n---  Initializing Chatbot Test ---")
+    
+    # Create the Vector Store
+    embeddings = OpenAIEmbeddings()
+    vectorstore = FAISS.from_documents(langchain_docs, embeddings)
+    
+    # Create the QA Chain
+    # Force 'rest' transport to bypass strict firewall rules
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash", 
+        temperature=0,
+        transport="rest"  # <--- ADD THIS LINE
+    )
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        chain_type="stuff",
+        retriever=vectorstore.as_retriever()
+    )
+
+    print(" System Ready! Type 'exit' to stop.")
+    
+    while True:
+        query = input("\n👤 You: ")
+        if query.lower() in ['exit', 'quit']:
+            break
+            
+        # Get answer from website text
+        response = qa_chain.run(query)
+        
+        # Logic to find relevant PDFs from our list
+        # Simple keyword match: check if words in query are in the PDF filename
+        suggested_pdfs = [pdf for pdf in pdf_list if any(word.lower() in pdf.lower() for word in query.split())]
+
+        print(f"\n Bot: {response}")
+        
+        if suggested_pdfs:
+            print("\n📂 Related Documents found:")
+            for pdf in suggested_pdfs[:3]: # Show top 3
+                print(f"   -> {pdf}")
+
+# --- RUN IT ---  gen-lang-client-0320268997 gemini api key 
+if __name__ == "__main__":
+    # Ensure your API Key is set in your environment
+    os.environ["GOOGLE_API_KEY"] = "AIzaSyBJL_CE-qD8G7a6fA7rMMo8oCH82PYAWpA"
+    start_terminal_chat(langchain_docs, pdf_list)

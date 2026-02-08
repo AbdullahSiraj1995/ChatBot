@@ -1,0 +1,74 @@
+import os
+from dotenv import load_dotenv
+import requests
+import time
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_community.vectorstores import FAISS
+#from langchain_community.embeddings import HuggingFaceEmbeddings OLD IMPORT, REPLACED WITH NEW ONE BELOW
+from langchain_huggingface import HuggingFaceEmbeddings
+
+# --- CONFIGURATION ---
+BASE_URL = "https://www.ecc.de/en/risk-management/"
+DB_NAME = "company_knowledge_base"
+#GOOGLE_API_KEY = os.getenv("AIzaSyAWnvnc3rvH8sZhmEwnZHPchBaoL8_zDsw")
+#load_dotenv() 
+#api_key = os.getenv("GOOGLE_API_KEY")
+
+def crawl_and_save():
+    to_visit = {BASE_URL}
+    visited = set()
+    langchain_docs = []
+
+    print("🕸️ Starting Scraper...")
+    while to_visit and len(visited) < 50: # Limit for testing
+        url = to_visit.pop()
+        if url in visited: continue
+        try:
+            res = requests.get(url, timeout=10)
+            visited.add(url)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            text = soup.get_text(separator=' ', strip=True)
+            langchain_docs.append(Document(page_content=text, metadata={"source": url}))
+            
+            for link in soup.find_all('a', href=True):
+                full_url = urljoin(url, link['href']).split('#')[0].rstrip('/')
+                if urlparse(full_url).netloc == urlparse(BASE_URL).netloc and full_url not in visited:
+                    to_visit.add(full_url)
+        except Exception as e:
+            print(f"Error: {e}")
+
+    # --- CHUNKING ---
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    final_chunks = text_splitter.split_documents(langchain_docs)
+
+    # --- SAVING TO DISK ---
+    print(f"🧠 Creating Knowledge Base from {len(final_chunks)} chunks...")
+    #embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001", transport="rest") GOOGLE API KEY NOT WORKING
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    vectorstore = FAISS.from_documents(final_chunks, embeddings)
+    vectorstore.save_local(DB_NAME) # <--- This saves the files in your folder!
+    print(f"✅ Knowledge Base saved to folder: {DB_NAME}")
+
+    print(f"🧠 Building Knowledge Base in batches...")
+    batch_size = 5 # Send only 5 chunks at a time
+    vectorstore = None
+
+    for i in range(0, len(final_chunks), batch_size):
+        batch = final_chunks[i : i + batch_size]
+        
+        if vectorstore is None:
+            vectorstore = FAISS.from_documents(batch, embeddings)
+        else:
+            vectorstore.add_documents(batch)
+        
+        print(f"✅ Processed {i + len(batch)} / {len(final_chunks)} chunks...")
+        time.sleep(10) # Wait 10 seconds before the next batch to avoid 429
+
+    vectorstore.save_local(DB_NAME)
+
+if __name__ == "__main__":
+    crawl_and_save()
